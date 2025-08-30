@@ -1,4 +1,16 @@
+# requirements.txt (финальная версия)
 fastapi
 uvicorn[standard]
 requests
 pytest
+python-dotenv
+pvporcupine
+pyaudio
+openai-whisper
+torch
+torch-directml
+webrtcvad-wheels
+httpx
+sounddevice
+piper-tts
+onnxruntime

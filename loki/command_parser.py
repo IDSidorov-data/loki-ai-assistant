@@ -1,20 +1,28 @@
 # loki/command_parser.py
 
 import re
-from typing import List
+import json
+import logging
+from typing import Optional, Dict, Any, Tuple
 
-# Паттерн обновлен: \s+ соответствует одному или нескольким пробельным символам (пробел, таб, и т.д.)
-# Это делает парсер устойчивым к лишним пробелам.
-COMMAND_PATTERN = re.compile(r"set\s+status\s+to\s+(\w+)", re.IGNORECASE)
+COMMAND_JSON_PATTERN = re.compile(r"\[CMD\](.*?)\[/CMD\]", re.DOTALL)
 
 
-def find_commands(text: str) -> List[str]:
-    """
-    Ищет предопределенные команды в тексте с помощью скомпилированного
-    регулярного выражения. Устойчив к множественным пробелам.
-    Пример: "LOKI, set status to processing" -> вернет ["processing"]
-    """
+def parse_llm_response(text: str) -> Tuple[str, Optional[Dict[str, Any]]]:
     if not isinstance(text, str):
-        return []
+        return "", None
 
-    return COMMAND_PATTERN.findall(text)
+    command_json = None
+    match = COMMAND_JSON_PATTERN.search(text)
+
+    if match:
+        json_str = match.group(1).strip()
+        try:
+            command_json = json.loads(json_str)
+        except json.JSONDecodeError:
+            logging.error(f"Failed to parse command JSON: {json_str}")
+            command_json = None
+
+    clean_text = COMMAND_JSON_PATTERN.sub("", text).strip()
+
+    return clean_text, command_json
