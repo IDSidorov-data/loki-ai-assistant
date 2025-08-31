@@ -1,50 +1,83 @@
 # tests/test_command_parser.py
 
 import pytest
-from loki.command_parser import find_commands
+from loki.command_parser import parse_llm_response
 
 
-@pytest.mark.parametrize(
-    "input_text, expected_output",
-    [
-        # Стандартный случай
-        ("LOKI, please set status to processing", ["processing"]),
-        # Другой регистр
-        ("loki, SET STATUS TO idle now", ["idle"]),
-        # Команда отсутствует
-        ("LOKI, what is the current status?", []),
-        # Несколько команд
-        (
-            "First, set status to listening, then later set status to speaking.",
-            ["listening", "speaking"],
-        ),
-        # Пустая строка
-        ("", []),
-        # Команда в начале строки
-        ("set status to idle", ["idle"]),
-        # Тест на лишние пробелы (теперь должен проходить)
-        ("  set   status   to   processing  ", ["processing"]),
-    ],
-)
-def test_find_commands_valid_strings(input_text, expected_output):
+def test_parse_with_valid_command():
     """
-    Проверяет функцию find_commands с различными валидными строковыми входными данными.
+    Тест: Ответ LLM содержит валидный JSON-блок [CMD].
+    Ожидание: Текст очищен, JSON успешно распарсен.
     """
-    assert find_commands(input_text) == expected_output
+    text = 'Конечно, я сделаю это. [CMD]{"tool_name": "set_status", "parameters": {"status": "speaking"}}[/CMD]'
+    clean_text, command = parse_llm_response(text)
+    assert clean_text == "Конечно, я сделаю это."
+    assert command == {"tool_name": "set_status", "parameters": {"status": "speaking"}}
 
 
-@pytest.mark.parametrize(
-    "invalid_input",
-    [
-        None,
-        12345,
-        ["list", "of", "strings"],
-        {"a": "dict"},
-    ],
-)
-def test_find_commands_invalid_input_types(invalid_input):
+def test_parse_without_command():
     """
-    Проверяет, что функция корректно обрабатывает нестроковые входные данные,
-    возвращая пустой список без вызова исключений.
+    Тест: Ответ LLM не содержит блок [CMD].
+    Ожидание: Текст не изменен, команда отсутствует (None).
     """
-    assert find_commands(invalid_input) == []
+    text = "Я не могу выполнить эту команду, но я постараюсь помочь."
+    clean_text, command = parse_llm_response(text)
+    assert clean_text == "Я не могу выполнить эту команду, но я постараюсь помочь."
+    assert command is None
+
+
+def test_parse_with_malformed_json():
+    """
+    Тест: Ответ LLM содержит блок [CMD] с некорректным JSON.
+    Ожидание: Текст очищен, команда отсутствует (None) из-за ошибки парсинга.
+    """
+    text = 'Хорошо. [CMD]{"tool_name": "set_status", "parameters": {"status": "speaking}}[/CMD]'
+    clean_text, command = parse_llm_response(text)
+    assert clean_text == "Хорошо."
+    assert command is None
+
+
+def test_parse_with_empty_cmd_block():
+    """
+    Тест: Ответ LLM содержит пустой блок [CMD].
+    Ожидание: Текст очищен, команда отсутствует (None).
+    """
+    text = "Сделано. [CMD][/CMD]"
+    clean_text, command = parse_llm_response(text)
+    assert clean_text == "Сделано."
+    assert command is None
+
+
+def test_parse_empty_string_input():
+    """
+    Тест: На вход подана пустая строка.
+    Ожидание: Возвращается пустая строка и None.
+    """
+    text = ""
+    clean_text, command = parse_llm_response(text)
+    assert clean_text == ""
+    assert command is None
+
+
+def test_parse_none_input():
+    """
+    Тест: На вход подан None.
+    Ожидание: Возвращается пустая строка и None для защиты от ошибок.
+    """
+    text = None
+    clean_text, command = parse_llm_response(text)
+    assert clean_text == ""
+    assert command is None
+
+
+def test_text_with_multiple_cmd_blocks():
+    """
+
+    Тест: Ответ LLM содержит несколько блоков [CMD].
+    Ожидание: Regex по своей природе "жадный" и найдет только первый блок.
+               Текст будет очищен от всех вхождений.
+    """
+    text = 'Первая команда. [CMD]{"key": "val1"}[/CMD] И вторая. [CMD]{"key": "val2"}[/CMD]'
+    clean_text, command = parse_llm_response(text)
+    assert clean_text == "Первая команда.  И вторая."
+    assert command == {"key": "val1"}  # re.search находит первое вхождение
