@@ -9,6 +9,8 @@ import pyaudio
 import asyncio
 from dotenv import load_dotenv
 
+import sounddevice as sd
+
 load_dotenv()
 
 from loki.audio_handler import record_command_vad
@@ -58,7 +60,6 @@ class LokiOrchestrator:
                 keyword_paths=keyword_paths,
             )
             self.pa = pyaudio.PyAudio()
-
             while True:
                 try:
                     self.audio_stream = self.pa.open(
@@ -75,7 +76,6 @@ class LokiOrchestrator:
                         f"Failed to open audio stream: {e}. Retrying in 5 seconds..."
                     )
                     await asyncio.sleep(5)
-
             logging.info(f"LOKI initialized. Listening for wake word...")
         except Exception as e:
             logging.error(f"Failed to initialize resources: {e}")
@@ -134,9 +134,24 @@ class LokiOrchestrator:
                             "parameters": {"status": "speaking"},
                         }
                     )
-                    await loop.run_in_executor(
-                        None, self.tts_engine.speak, text_to_speak
+
+                    stream = sd.RawOutputStream(
+                        samplerate=self.tts_engine.sample_rate,
+                        channels=1,
+                        dtype="int16",
                     )
+                    stream.start()
+                    logging.info("Audio stream for playback started.")
+                    try:
+                        # Асинхронно итерируемся по чанкам из TTS генератора
+                        async for chunk in self.tts_engine.stream(text_to_speak):
+                            if chunk:
+                                stream.write(chunk)
+                    finally:
+                        stream.stop()
+                        stream.close()
+                        logging.info("Audio stream for playback finished.")
+
         handle_visual_command(
             {"tool_name": "set_status", "parameters": {"status": "idle"}}
         )
