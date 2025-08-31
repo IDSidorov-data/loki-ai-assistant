@@ -1,10 +1,7 @@
-# loki/loki_core.py
-
 import sys
 import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
 import logging
 import struct
 import pvporcupine
@@ -12,17 +9,17 @@ import pyaudio
 import asyncio
 from dotenv import load_dotenv
 
-# Загружаем переменные окружения в самом начале
+from pyaudio import PyAudioError
+
 load_dotenv()
 
 from loki.audio_handler import record_command_vad
 from loki.stt_handler import WhisperSTT
-from loki.tts_handler import Piper_Engine 
+from loki.tts_handler import Piper_Engine
 from loki.llm_client import OllamaLLMClient
 from loki.command_parser import parse_llm_response
 from loki.visual_controller import handle_visual_command
 
-# --- Конфигурация ---
 LOG_LEVEL = os.getenv("LOKI_LOG_LEVEL", "INFO").upper()
 PICOVOICE_ACCESS_KEY = os.getenv("PICOVOICE_ACCESS_KEY")
 WAKE_WORD = os.getenv("LOKI_WAKE_WORD", "jarvis")
@@ -37,7 +34,6 @@ class LokiOrchestrator:
         self.stt_engine = WhisperSTT(model_name="base")
         self.tts_engine = Piper_Engine(model_path=PIPER_VOICE_PATH)
         self.llm_client = OllamaLLMClient()
-
         self.porcupine = None
         self.pa = None
         self.audio_stream = None
@@ -49,32 +45,39 @@ class LokiOrchestrator:
             raise ValueError(
                 "LOKI_PIPER_VOICE_PATH не найден или указан неверный путь."
             )
-
         try:
             keywords = [WAKE_WORD]
             keyword_paths = None
-
             if CUSTOM_WAKE_WORD_PATH and os.path.exists(CUSTOM_WAKE_WORD_PATH):
                 keywords = None
                 keyword_paths = [CUSTOM_WAKE_WORD_PATH]
                 logging.info(f"Using custom wake word from: {CUSTOM_WAKE_WORD_PATH}")
             else:
                 logging.info(f"Using built-in wake word: '{WAKE_WORD}'")
-
             self.porcupine = pvporcupine.create(
                 access_key=PICOVOICE_ACCESS_KEY,
                 keywords=keywords,
                 keyword_paths=keyword_paths,
             )
-
             self.pa = pyaudio.PyAudio()
-            self.audio_stream = self.pa.open(
-                rate=self.porcupine.sample_rate,
-                channels=1,
-                format=pyaudio.paInt16,
-                input=True,
-                frames_per_buffer=self.porcupine.frame_length,
-            )
+
+            while True:
+                try:
+                    self.audio_stream = self.pa.open(
+                        rate=self.porcupine.sample_rate,
+                        channels=1,
+                        format=pyaudio.paInt16,
+                        input=True,
+                        frames_per_buffer=self.porcupine.frame_length,
+                    )
+                    logging.info("Audio stream opened successfully.")
+                    break  # Выходим из цикла, если подключение успешно
+                except PyAudioError as e:
+                    logging.error(
+                        f"Failed to open audio stream: {e}. Retrying in 5 seconds..."
+                    )
+                    await asyncio.sleep(5)  # Неблокирующая пауза
+
             logging.info(f"LOKI initialized. Listening for wake word...")
         except Exception as e:
             logging.error(f"Failed to initialize resources: {e}")

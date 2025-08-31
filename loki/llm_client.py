@@ -1,23 +1,18 @@
-# loki/llm_client.py
-
 import httpx
 import logging
 import os
 from typing import Optional
-
 from .prompts import SYSTEM_PROMPT
 
 
 class OllamaLLMClient:
     def __init__(self):
         self.base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-        self.model = os.getenv("OLLAMA_MODEL", "my-llama3")
+        self.model = os.getenv("OLLAMA_MODEL", "llama3:8b-instruct-q4_k_m")
         self.async_client = httpx.AsyncClient(timeout=120.0)
         logging.info(
             f"OllamaLLMClient initialized for model '{self.model}' at {self.base_url}"
         )
-
-        # ПРАВИЛО 3: "Прогреваем" модель при старте для устранения "холодного старта".
         self._load_model_on_startup()
 
     def _load_model_on_startup(self):
@@ -43,7 +38,6 @@ class OllamaLLMClient:
                     "system": SYSTEM_PROMPT,
                     "prompt": user_prompt,
                     "stream": False,
-                    # ПРАВИЛО 4: Указываем использование GPU в каждом запросе.
                     "options": {"num_gpu": 99},
                 },
             )
@@ -52,12 +46,12 @@ class OllamaLLMClient:
             return response_data.get("response")
         except httpx.RequestError as e:
             logging.error(f"Could not connect to Ollama server: {e}")
-            return "Произошла ошибка при подключении к языковой модели."
+            return "Произошла ошибка при подключении к языковой модели. Пожалуйста, проверьте, запущен ли сервер Ollama."
         except Exception as e:
             logging.error(
                 f"An unexpected error occurred in LLM client: {e}", exc_info=True
             )
-            return "Произошла непредвиденная ошибка."
+            return "Произошла непредвиденная ошибка при обработке вашего запроса."
 
     async def close(self):
         await self.async_client.aclose()
