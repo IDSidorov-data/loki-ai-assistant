@@ -1,5 +1,9 @@
+# loki/loki_core.py
+
 import sys
 import os
+import re
+import numpy as np
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import logging
@@ -134,47 +138,121 @@ class LokiOrchestrator:
                 await asyncio.sleep(1)
 
     async def handle_command_async(self, audio_path: str):
+        audio_playback_stream = None
         try:
             loop = asyncio.get_running_loop()
             user_command_text = await loop.run_in_executor(
                 None, self.stt_engine.transcribe, audio_path
             )
-            if user_command_text:
+            if not user_command_text:
+                return
 
-                # 1. Собираем полный ответ от LLM, проверяя на прерывание
-                full_llm_response = ""
-                async for token in self.llm_client.stream_response(user_command_text):
-                    if self.interrupt_event.is_set():
-                        logging.info("LLM stream interrupted.")
-                        return  # Немедленно выходим
-                    full_llm_response += token
+            thoughts_content = ""
+            answer_content = ""
+            answer_text_for_tts_buffer = ""
+            answer_started = False
 
-                # 2. Извлекаем чистый ответ из тегов <ответ>
-                clean_response = extract_clean_response(full_llm_response)
+            # Основной цикл, который одновременно получает токены от LLM и отправляет аудио в TTS
+            async for chunk in self.llm_client.stream_response(user_command_text):
+                if self.interrupt_event.is_set():
+                    logging.info("LLM stream processing interrupted.")
+                    break
 
-                # 3. Парсим чистый ответ на текст для озвучки и команду
-                text_to_speak, command_json = parse_llm_response(clean_response)
+                content = chunk.get("content", "")
 
-                # 4. Озвучиваем текст целиком (непотоково, но надежно)
-                if text_to_speak and not self.interrupt_event.is_set():
-                    handle_visual_command(
-                        {
-                            "tool_name": "set_status",
-                            "parameters": {"status": "speaking"},
-                        }
-                    )
-                    await loop.run_in_executor(
-                        None, self.tts_engine.speak, text_to_speak
-                    )
+                if chunk["type"] == "thought":
+                    thoughts_content += content
+                elif chunk["type"] == "answer":
+                    answer_content += content
 
-                # 5. Выполняем команду, если она была
-                if command_json and not self.interrupt_event.is_set():
+                    if not answer_started:
+                        # Инициализируем аудиопоток только тогда, когда есть что говорить
+                        answer_started = True
+                        handle_visual_command(
+                            {
+                                "tool_name": "set_status",
+                                "parameters": {"status": "speaking"},
+                            }
+                        )
+                        audio_playback_stream = sd.RawOutputStream(
+                            samplerate=self.tts_engine.sample_rate,
+                            channels=1,
+                            dtype="int16",
+                        )
+                        audio_playback_stream.start()
+                        logging.info("Audio playback stream started (on-demand).")
+
+                    answer_text_for_tts_buffer += content
+
+                    # Улучшенная логика разбиения на предложения
+                    sentence_terminators = re.compile(r"([.!?]|,\s|\.\.\.|\n)")
+                    while True:
+                        match = sentence_terminators.search(answer_text_for_tts_buffer)
+                        if not match:
+                            break
+
+                        end_index = match.end()
+                        sentence = answer_text_for_tts_buffer[:end_index].strip()
+                        answer_text_for_tts_buffer = answer_text_for_tts_buffer[
+                            end_index:
+                        ]
+
+                        if sentence:
+                            logging.info(f"Streaming sentence to TTS: '{sentence}'")
+                            async for audio_chunk in self.tts_engine.stream(sentence):
+                                if self.interrupt_event.is_set():
+                                    break
+                                if (
+                                    audio_playback_stream
+                                    and not audio_playback_stream.closed
+                                ):
+                                    audio_playback_stream.write(audio_chunk)
+                        if self.interrupt_event.is_set():
+                            break
+                if self.interrupt_event.is_set():
+                    break
+
+            # Озвучиваем остаток из буфера
+            if (
+                answer_text_for_tts_buffer.strip()
+                and not self.interrupt_event.is_set()
+                and audio_playback_stream
+            ):
+                logging.info(
+                    f"Streaming final sentence to TTS: '{answer_text_for_tts_buffer.strip()}'"
+                )
+                async for audio_chunk in self.tts_engine.stream(
+                    answer_text_for_tts_buffer.strip()
+                ):
+                    if audio_playback_stream and not audio_playback_stream.closed:
+                        audio_playback_stream.write(audio_chunk)
+
+            # "Холодный" парсер
+            if not self.interrupt_event.is_set():
+                full_structured_response = (
+                    f"<мысли>{thoughts_content}</мысли><ответ>{answer_content}</ответ>"
+                )
+                clean_response = extract_clean_response(full_structured_response)
+                _, command_json = parse_llm_response(clean_response)
+                if command_json:
                     handle_visual_command(command_json)
+
+            if not answer_started and not self.interrupt_event.is_set():
+                logging.warning("LLM response did not contain an <answer> block.")
+                await loop.run_in_executor(
+                    None,
+                    self.tts_engine.speak,
+                    "Произошла ошибка при формировании ответа.",
+                )
 
         except asyncio.CancelledError:
             logging.info("Command handling was cancelled.")
             raise
         finally:
+            if audio_playback_stream:
+                audio_playback_stream.stop()
+                audio_playback_stream.close()
+                logging.info("Audio playback stream closed.")
             if not self.interrupt_event.is_set():
                 handle_visual_command(
                     {"tool_name": "set_status", "parameters": {"status": "idle"}}

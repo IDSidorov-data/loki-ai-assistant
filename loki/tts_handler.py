@@ -23,7 +23,7 @@ class Piper_Engine:
     def speak(self, text: str):
         """
         Синтезирует и воспроизводит речь (блокирующий метод).
-        Используется для надежного воспроизведения после полной генерации ответа.
+        Используется для надежного воспроизведения коротких фраз или сообщений об ошибках.
         """
         try:
             logging.info(f"Synthesizing speech for: '{text}'")
@@ -49,14 +49,16 @@ class Piper_Engine:
     async def stream(self, text: str) -> AsyncGenerator[bytes, None]:
         """
         Синтезирует речь и отдает аудиоданные по частям (чанками).
-        (Временно не используется в пользу более надежного метода speak)
+        Используется для потокового воспроизведения длинных ответов.
         """
         try:
-            logging.info(f"Streaming speech for: '{text}'")
+            # Не логируем здесь, чтобы не засорять вывод при стриминге
+            # logging.info(f"Streaming speech for: '{text}'")
             audio_generator = self.voice.synthesize(text)
 
             for chunk in audio_generator:
-                yield chunk.audio_int16_bytes
+                if chunk.audio_int16_bytes:
+                    yield chunk.audio_int16_bytes
 
         except Exception as e:
             logging.error(
