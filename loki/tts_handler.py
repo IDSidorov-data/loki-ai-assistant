@@ -1,6 +1,8 @@
 # loki/tts_handler.py
 
 import logging
+import sounddevice as sd
+import numpy as np
 from piper.voice import PiperVoice
 import os
 from typing import AsyncGenerator
@@ -18,18 +20,42 @@ class Piper_Engine:
             f"Piper TTS model loaded successfully. Sample rate: {self.sample_rate} Hz"
         )
 
+    def speak(self, text: str):
+        """
+        Синтезирует и воспроизводит речь (блокирующий метод).
+        Используется для надежного воспроизведения после полной генерации ответа.
+        """
+        try:
+            logging.info(f"Synthesizing speech for: '{text}'")
+            audio_generator = self.voice.synthesize(text)
+            audio_chunks = [chunk.audio_int16_bytes for chunk in audio_generator]
+            audio_bytes = b"".join(audio_chunks)
+
+            if not audio_bytes:
+                logging.warning("Synthesis resulted in empty audio. Nothing to play.")
+                return
+
+            audio_array = np.frombuffer(audio_bytes, dtype=np.int16)
+            logging.info("Playing synthesized audio...")
+            sd.play(audio_array, samplerate=self.sample_rate)
+            sd.wait()
+            logging.info("Playback finished.")
+        except Exception as e:
+            logging.error(
+                f"An error occurred during Piper TTS synthesis or playback: {e}",
+                exc_info=True,
+            )
+
     async def stream(self, text: str) -> AsyncGenerator[bytes, None]:
         """
         Синтезирует речь и отдает аудиоданные по частям (чанками).
-        Это позволяет начать воспроизведение до того, как вся фраза будет сгенерирована.
+        (Временно не используется в пользу более надежного метода speak)
         """
         try:
             logging.info(f"Streaming speech for: '{text}'")
-            # audio_generator - это ленивый итератор, который генерирует чанки по требованию
             audio_generator = self.voice.synthesize(text)
 
             for chunk in audio_generator:
-                # Мы не копим чанки, а сразу отдаем их наружу
                 yield chunk.audio_int16_bytes
 
         except Exception as e:

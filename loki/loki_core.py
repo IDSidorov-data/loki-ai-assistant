@@ -16,7 +16,7 @@ from loki.audio_handler import record_command_vad
 from loki.stt_handler import WhisperSTT
 from loki.tts_handler import Piper_Engine
 from loki.llm_client import OllamaLLMClient
-from loki.command_parser import parse_llm_response
+from loki.command_parser import parse_llm_response, extract_clean_response
 from loki.visual_controller import handle_visual_command
 
 LOG_LEVEL = os.getenv("LOKI_LOG_LEVEL", "INFO").upper()
@@ -36,6 +36,8 @@ class LokiOrchestrator:
         self.porcupine = None
         self.pa = None
         self.audio_stream = None
+        self.interrupt_event = asyncio.Event()
+        self.current_command_task = None
 
     async def initialize_resources_async(self):
         if not PICOVOICE_ACCESS_KEY:
@@ -94,6 +96,7 @@ class LokiOrchestrator:
             result = self.porcupine.process(pcm)
             if result >= 0:
                 logging.info("Wake word detected!")
+                self.interrupt_event.set()
                 return
 
     async def run_async(self):
@@ -103,11 +106,26 @@ class LokiOrchestrator:
         while True:
             try:
                 await self._listen_for_wake_word_async()
+
+                if self.current_command_task and not self.current_command_task.done():
+                    logging.info("Interrupting previous command.")
+                    self.current_command_task.cancel()
+                    try:
+                        await self.current_command_task
+                    except asyncio.CancelledError:
+                        logging.info("Previous command task cancelled.")
+
+                self.interrupt_event.clear()
+
                 handle_visual_command(
                     {"tool_name": "set_status", "parameters": {"status": "listening"}}
                 )
                 command_audio_path = record_command_vad()
-                asyncio.create_task(self.handle_command_async(command_audio_path))
+
+                self.current_command_task = asyncio.create_task(
+                    self.handle_command_async(command_audio_path)
+                )
+
             except KeyboardInterrupt:
                 logging.info("Shutdown signal received.")
                 break
@@ -116,63 +134,56 @@ class LokiOrchestrator:
                 await asyncio.sleep(1)
 
     async def handle_command_async(self, audio_path: str):
-        loop = asyncio.get_running_loop()
-        user_command_text = await loop.run_in_executor(
-            None, self.stt_engine.transcribe, audio_path
-        )
-        if user_command_text:
-            handle_visual_command(
-                {"tool_name": "set_status", "parameters": {"status": "speaking"}}
+        try:
+            loop = asyncio.get_running_loop()
+            user_command_text = await loop.run_in_executor(
+                None, self.stt_engine.transcribe, audio_path
             )
+            if user_command_text:
 
-            full_llm_response = ""
-            sentence_buffer = ""
-            terminators = ".!?\n,"  # Паузы на запятых тоже улучшают восприятие
-
-            stream = sd.RawOutputStream(
-                samplerate=self.tts_engine.sample_rate, channels=1, dtype="int16"
-            )
-            stream.start()
-            logging.info("Audio playback stream started.")
-            try:
-                # Основной цикл: получаем токены от LLM
+                # 1. Собираем полный ответ от LLM, проверяя на прерывание
+                full_llm_response = ""
                 async for token in self.llm_client.stream_response(user_command_text):
+                    if self.interrupt_event.is_set():
+                        logging.info("LLM stream interrupted.")
+                        return  # Немедленно выходим
                     full_llm_response += token
-                    sentence_buffer += token
 
-                    # Если в буфере есть знак-терминатор, озвучиваем предложение
-                    if any(p in sentence_buffer for p in terminators):
-                        # Вложенный цикл: получаем аудио-чанки для этого предложения
-                        async for audio_chunk in self.tts_engine.stream(
-                            sentence_buffer
-                        ):
-                            if audio_chunk:
-                                stream.write(audio_chunk)
-                        sentence_buffer = ""  # Очищаем буфер
+                # 2. Извлекаем чистый ответ из тегов <ответ>
+                clean_response = extract_clean_response(full_llm_response)
 
-                # Озвучиваем остаток в буфере после завершения основного цикла
-                if sentence_buffer.strip():
-                    async for audio_chunk in self.tts_engine.stream(sentence_buffer):
-                        if audio_chunk:
-                            stream.write(audio_chunk)
+                # 3. Парсим чистый ответ на текст для озвучки и команду
+                text_to_speak, command_json = parse_llm_response(clean_response)
 
-            finally:
-                stream.stop()
-                stream.close()
-                logging.info("Audio playback stream finished.")
+                # 4. Озвучиваем текст целиком (непотоково, но надежно)
+                if text_to_speak and not self.interrupt_event.is_set():
+                    handle_visual_command(
+                        {
+                            "tool_name": "set_status",
+                            "parameters": {"status": "speaking"},
+                        }
+                    )
+                    await loop.run_in_executor(
+                        None, self.tts_engine.speak, text_to_speak
+                    )
 
-            # После того как все сказано, парсим полную строку на наличие команд
-            if full_llm_response:
-                _, command_json = parse_llm_response(full_llm_response)
-                if command_json:
+                # 5. Выполняем команду, если она была
+                if command_json and not self.interrupt_event.is_set():
                     handle_visual_command(command_json)
 
-        handle_visual_command(
-            {"tool_name": "set_status", "parameters": {"status": "idle"}}
-        )
+        except asyncio.CancelledError:
+            logging.info("Command handling was cancelled.")
+            raise
+        finally:
+            if not self.interrupt_event.is_set():
+                handle_visual_command(
+                    {"tool_name": "set_status", "parameters": {"status": "idle"}}
+                )
 
     async def cleanup(self):
         logging.info("Cleaning up resources...")
+        if self.current_command_task:
+            self.current_command_task.cancel()
         if self.audio_stream:
             self.audio_stream.close()
         if self.pa:

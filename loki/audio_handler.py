@@ -25,7 +25,7 @@ def record_command_vad():
     frames = []
     triggered = False
     silent_chunks = 0
-    num_padding_chunks = 15
+    num_padding_chunks = 35
     while True:
         chunk = stream.read(config.CHUNK_SIZE)
         is_speech = vad.is_speech(chunk, config.AUDIO_RATE)
