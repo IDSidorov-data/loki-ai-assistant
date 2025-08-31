@@ -16,3 +16,6 @@ models/
 
 # Файлы логов
 *.log
+
+# Build artifacts
+*loki.egg-info/
