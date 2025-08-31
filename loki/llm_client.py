@@ -4,11 +4,13 @@ import os
 from typing import Optional
 from .prompts import SYSTEM_PROMPT
 
+from loki import config
+
 
 class OllamaLLMClient:
     def __init__(self):
-        self.base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-        self.model = os.getenv("OLLAMA_MODEL", "llama3:8b-instruct-q4_k_m")
+        self.base_url = os.getenv("OLLAMA_BASE_URL", config.DEFAULT_OLLAMA_BASE_URL)
+        self.model = os.getenv("OLLAMA_MODEL", config.DEFAULT_OLLAMA_MODEL)
         self.async_client = httpx.AsyncClient(timeout=120.0)
         logging.info(
             f"OllamaLLMClient initialized for model '{self.model}' at {self.base_url}"

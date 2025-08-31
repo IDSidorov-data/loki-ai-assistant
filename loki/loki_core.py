@@ -9,8 +9,6 @@ import pyaudio
 import asyncio
 from dotenv import load_dotenv
 
-from pyaudio import PyAudioError
-
 load_dotenv()
 
 from loki.audio_handler import record_command_vad
@@ -71,12 +69,12 @@ class LokiOrchestrator:
                         frames_per_buffer=self.porcupine.frame_length,
                     )
                     logging.info("Audio stream opened successfully.")
-                    break  # Выходим из цикла, если подключение успешно
-                except PyAudioError as e:
+                    break
+                except IOError as e:
                     logging.error(
                         f"Failed to open audio stream: {e}. Retrying in 5 seconds..."
                     )
-                    await asyncio.sleep(5)  # Неблокирующая пауза
+                    await asyncio.sleep(5)
 
             logging.info(f"LOKI initialized. Listening for wake word...")
         except Exception as e:
