@@ -8,7 +8,6 @@ import pvporcupine
 import pyaudio
 import asyncio
 from dotenv import load_dotenv
-
 import sounddevice as sd
 
 load_dotenv()
@@ -122,35 +121,51 @@ class LokiOrchestrator:
             None, self.stt_engine.transcribe, audio_path
         )
         if user_command_text:
-            llm_response = await self.llm_client.get_response(user_command_text)
-            if llm_response:
-                text_to_speak, command_json = parse_llm_response(llm_response)
+            handle_visual_command(
+                {"tool_name": "set_status", "parameters": {"status": "speaking"}}
+            )
+
+            full_llm_response = ""
+            sentence_buffer = ""
+            terminators = ".!?\n,"  # Паузы на запятых тоже улучшают восприятие
+
+            stream = sd.RawOutputStream(
+                samplerate=self.tts_engine.sample_rate, channels=1, dtype="int16"
+            )
+            stream.start()
+            logging.info("Audio playback stream started.")
+            try:
+                # Основной цикл: получаем токены от LLM
+                async for token in self.llm_client.stream_response(user_command_text):
+                    full_llm_response += token
+                    sentence_buffer += token
+
+                    # Если в буфере есть знак-терминатор, озвучиваем предложение
+                    if any(p in sentence_buffer for p in terminators):
+                        # Вложенный цикл: получаем аудио-чанки для этого предложения
+                        async for audio_chunk in self.tts_engine.stream(
+                            sentence_buffer
+                        ):
+                            if audio_chunk:
+                                stream.write(audio_chunk)
+                        sentence_buffer = ""  # Очищаем буфер
+
+                # Озвучиваем остаток в буфере после завершения основного цикла
+                if sentence_buffer.strip():
+                    async for audio_chunk in self.tts_engine.stream(sentence_buffer):
+                        if audio_chunk:
+                            stream.write(audio_chunk)
+
+            finally:
+                stream.stop()
+                stream.close()
+                logging.info("Audio playback stream finished.")
+
+            # После того как все сказано, парсим полную строку на наличие команд
+            if full_llm_response:
+                _, command_json = parse_llm_response(full_llm_response)
                 if command_json:
                     handle_visual_command(command_json)
-                if text_to_speak:
-                    handle_visual_command(
-                        {
-                            "tool_name": "set_status",
-                            "parameters": {"status": "speaking"},
-                        }
-                    )
-
-                    stream = sd.RawOutputStream(
-                        samplerate=self.tts_engine.sample_rate,
-                        channels=1,
-                        dtype="int16",
-                    )
-                    stream.start()
-                    logging.info("Audio stream for playback started.")
-                    try:
-                        # Асинхронно итерируемся по чанкам из TTS генератора
-                        async for chunk in self.tts_engine.stream(text_to_speak):
-                            if chunk:
-                                stream.write(chunk)
-                    finally:
-                        stream.stop()
-                        stream.close()
-                        logging.info("Audio stream for playback finished.")
 
         handle_visual_command(
             {"tool_name": "set_status", "parameters": {"status": "idle"}}
@@ -169,9 +184,8 @@ class LokiOrchestrator:
 
 
 async def main():
-    orchestrator = None
+    orchestrator = LokiOrchestrator()
     try:
-        orchestrator = LokiOrchestrator()
         await orchestrator.initialize_resources_async()
         await orchestrator.run_async()
     finally:

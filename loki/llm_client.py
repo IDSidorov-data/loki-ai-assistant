@@ -1,9 +1,9 @@
 import httpx
 import logging
 import os
-from typing import Optional
+import json
+from typing import Optional, AsyncGenerator
 from .prompts import SYSTEM_PROMPT
-
 from loki import config
 
 
@@ -31,29 +31,46 @@ class OllamaLLMClient:
                 f"An error occurred while pre-loading the model: {e}", exc_info=True
             )
 
-    async def get_response(self, user_prompt: str) -> Optional[str]:
+    async def stream_response(self, user_prompt: str) -> AsyncGenerator[str, None]:
+        """
+        Отправляет запрос к Ollama и получает ответ в виде потока токенов.
+        """
         try:
-            response = await self.async_client.post(
+            # Открываем асинхронный стриминговый запрос
+            async with self.async_client.stream(
+                "POST",
                 f"{self.base_url}/api/generate",
                 json={
                     "model": self.model,
                     "system": SYSTEM_PROMPT,
                     "prompt": user_prompt,
-                    "stream": False,
-                    "options": {"num_gpu": 99},
+                    "stream": True,
                 },
-            )
-            response.raise_for_status()
-            response_data = response.json()
-            return response_data.get("response")
+            ) as response:
+                response.raise_for_status()
+                # Асинхронно итерируемся по строкам ответа
+                async for line in response.aiter_lines():
+                    if line:
+                        try:
+                            # Каждая строка - это JSON-объект
+                            data = json.loads(line)
+                            # Извлекаем сам токен (часть слова)
+                            token = data.get("response", "")
+                            if token:
+                                yield token
+                            # Если модель закончила генерацию, выходим
+                            if data.get("done"):
+                                break
+                        except json.JSONDecodeError:
+                            logging.warning(f"Failed to decode JSON line: {line}")
         except httpx.RequestError as e:
             logging.error(f"Could not connect to Ollama server: {e}")
-            return "Произошла ошибка при подключении к языковой модели. Пожалуйста, проверьте, запущен ли сервер Ollama."
+            yield "Произошла ошибка при подключении к языковой модели."
         except Exception as e:
             logging.error(
-                f"An unexpected error occurred in LLM client: {e}", exc_info=True
+                f"An unexpected error occurred in LLM client stream: {e}", exc_info=True
             )
-            return "Произошла непредвиденная ошибка при обработке вашего запроса."
+            yield "Произошла непредвиденная ошибка."
 
     async def close(self):
         await self.async_client.aclose()
