@@ -1,11 +1,9 @@
 # loki/loki_core.py
 
-# --- НАДЕЖНЫЙ ФИКС ДЛЯ ИМПОРТОВ ---
 import sys
 import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-# --- КОНЕЦ ФИКСА ---
 
 import logging
 import struct
@@ -19,7 +17,7 @@ load_dotenv()
 
 from loki.audio_handler import record_command_vad
 from loki.stt_handler import WhisperSTT
-from loki.tts_handler import Piper_Engine  # <-- ИЗМЕНЕНО: Импортируем Piper_Engine
+from loki.tts_handler import Piper_Engine 
 from loki.llm_client import OllamaLLMClient
 from loki.command_parser import parse_llm_response
 from loki.visual_controller import handle_visual_command
@@ -28,7 +26,6 @@ from loki.visual_controller import handle_visual_command
 LOG_LEVEL = os.getenv("LOKI_LOG_LEVEL", "INFO").upper()
 PICOVOICE_ACCESS_KEY = os.getenv("PICOVOICE_ACCESS_KEY")
 WAKE_WORD = os.getenv("LOKI_WAKE_WORD", "jarvis")
-# --- ИЗМЕНЕНО: Новая переменная для голоса Piper ---
 PIPER_VOICE_PATH = os.getenv("LOKI_PIPER_VOICE_PATH")
 CUSTOM_WAKE_WORD_PATH = os.getenv("LOKI_CUSTOM_WAKE_WORD_PATH")
 
@@ -37,11 +34,9 @@ logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s - %(levelname)s - %(mes
 
 class LokiOrchestrator:
     def __init__(self):
-        # --- ИЗМЕНЕНО: Инициализируем Piper_Engine вместо XTTS_Engine ---
         self.stt_engine = WhisperSTT(model_name="base")
         self.tts_engine = Piper_Engine(model_path=PIPER_VOICE_PATH)
         self.llm_client = OllamaLLMClient()
-        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
         self.porcupine = None
         self.pa = None
@@ -50,7 +45,6 @@ class LokiOrchestrator:
     async def initialize_resources_async(self):
         if not PICOVOICE_ACCESS_KEY:
             raise ValueError("PICOVOICE_ACCESS_KEY не найден.")
-        # --- ИЗМЕНЕНО: Проверяем новую переменную ---
         if not PIPER_VOICE_PATH or not os.path.exists(PIPER_VOICE_PATH):
             raise ValueError(
                 "LOKI_PIPER_VOICE_PATH не найден или указан неверный путь."

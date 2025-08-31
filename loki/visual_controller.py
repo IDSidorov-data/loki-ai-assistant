@@ -15,8 +15,6 @@ async def set_loki_visual_state_async(status: str):
     """
     АСИНХРОННО отправляет команду в Wallpaper Engine.
     """
-    # ИСПРАВЛЕНИЕ: Получаем путь из .env файла прямо здесь, а не на уровне модуля.
-    # Это гарантирует, что load_dotenv() уже успел отработать.
     wallpaper_engine_path = os.getenv("WALLPAPER_ENGINE_PATH", DEFAULT_PATH)
 
     if not os.path.exists(wallpaper_engine_path):
