@@ -1,6 +1,32 @@
-[project]
-name = "loki"
+[tool.poetry]
+name = "loki-project"
 version = "0.1.0"
+description = "LOKI - A fully local Voice AI Assistant"
+authors = ["IDSidorov-data"]
+license = "MIT"
+readme = "README.md"
+packages = [{include = "loki"}]  # <-- ВОТ РЕШЕНИЕ ГЛАВНОЙ ПРОБЛЕМЫ
 
-[tool.setuptools]
-packages = ["loki"]
+[tool.poetry.dependencies]
+python = "3.11.9" # Вы можете оставить здесь и просто "3.11"
+fastapi = "*"
+uvicorn = {version = "*", extras = ["standard"]}
+requests = "*"
+python-dotenv = "*"
+pvporcupine = "*"
+pyaudio = "*"
+openai-whisper = "*"
+torch = "*"
+webrtcvad-wheels = "*"
+httpx = "*"
+sounddevice = "*"
+piper-tts = "*"
+onnxruntime = "*"
+
+# v-- ВОТ ИСПРАВЛЕНИЕ ДЛЯ ПРЕДУПРЕЖДЕНИЯ
+[tool.poetry.group.dev.dependencies] 
+pytest = "*"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
