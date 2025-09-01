@@ -45,8 +45,6 @@ def record_command_vad() -> str:
     frames = []
     triggered = False  # Флаг, который становится True после обнаружения речи
     silent_chunks = 0
-    # Количество "тихих" чанков, после которых запись останавливается
-    num_padding_chunks = 35
 
     while True:
         chunk = stream.read(config.CHUNK_SIZE)
@@ -66,7 +64,7 @@ def record_command_vad() -> str:
             if not is_speech:
                 # Если наступила тишина, начинаем считать "тихие" чанки
                 silent_chunks += 1
-                if silent_chunks > num_padding_chunks:
+                if silent_chunks > config.VAD_SILENCE_PADDING_CHUNKS:
                     # Если тишина длится достаточно долго, прекращаем запись
                     break
             else:

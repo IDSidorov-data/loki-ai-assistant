@@ -27,6 +27,10 @@ CHUNK_SIZE = int(AUDIO_RATE * CHUNK_DURATION_MS / 1000)
 # требует наименьшей громкости для срабатывания детектора речи.
 VAD_AGGRESSIVENESS = 3
 
+# Количество "тихих" чанков, после которых запись останавливается
+VAD_SILENCE_PADDING_CHUNKS = 35
+
+
 # --- LLM Client Configuration ---
 # Значения по умолчанию для подключения к локальному серверу Ollama
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
