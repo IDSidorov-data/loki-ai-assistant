@@ -1,11 +1,7 @@
 # loki/loki_core.py
-
 import sys
 import os
 import re
-import numpy as np
-import time
-
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import logging
 import struct
@@ -23,15 +19,16 @@ from loki.tts_handler import Piper_Engine
 from loki.llm_client import OllamaLLMClient
 from loki.command_parser import parse_llm_response
 from loki.visual_controller import handle_visual_command
+# Импортируем оба промпта
+from loki.prompts import DEFAULT_PROMPT, COMMAND_PROMPT
 
-LOG_LEVEL = os.getenv("LOKI_LOG_LEVEL", "DEBUG").upper()
+LOG_LEVEL = os.getenv("LOKI_LOG_LEVEL", "INFO").upper()
 PICOVOICE_ACCESS_KEY = os.getenv("PICOVOICE_ACCESS_KEY")
 WAKE_WORD = os.getenv("LOKI_WAKE_WORD", "jarvis")
 PIPER_VOICE_PATH = os.getenv("LOKI_PIPER_VOICE_PATH")
-CUSTOM_WAKE_WORD_PATH = os.getenv("LOKI_CUSTOM_WAKE_WORD_PATH")
+COMMAND_KEYWORDS = ["статус", "режим", "переключись", "состояние"]
 
 logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s - %(levelname)s - %(message)s")
-
 
 class LokiOrchestrator:
     def __init__(self):
@@ -47,8 +44,9 @@ class LokiOrchestrator:
         try:
             keywords = [WAKE_WORD]
             keyword_paths = None
-            if CUSTOM_WAKE_WORD_PATH and os.path.exists(CUSTOM_WAKE_WORD_PATH):
-                keywords, keyword_paths = None, [CUSTOM_WAKE_WORD_PATH]
+            if os.getenv("LOKI_CUSTOM_WAKE_WORD_PATH"):
+                keyword_paths = [os.getenv("LOKI_CUSTOM_WAKE_WORD_PATH")]
+                keywords = None
             self.porcupine = pvporcupine.create(access_key=PICOVOICE_ACCESS_KEY, keywords=keywords, keyword_paths=keyword_paths)
             self.pa = pyaudio.PyAudio()
             while True:
@@ -57,7 +55,24 @@ class LokiOrchestrator:
                     break
                 except IOError: await asyncio.sleep(5)
             logging.info("LOKI initialized.")
+
+            # <<< ДОБАВЛЕНО: Запускаем "разогрев" LLM в фоновом режиме
+            logging.info("Warming up LLM engine...")
+            asyncio.create_task(self._warm_up_llm())
+
         except Exception as e: await self.cleanup(); raise
+
+    # <<< ДОБАВЛЕНО: Новый метод для "разогрева"
+    async def _warm_up_llm(self):
+        """Отправляет фиктивный запрос к LLM, чтобы устранить "холодный старт"."""
+        try:
+            # Используем async for, чтобы "прочитать" весь ответ, но ничего с ним не делаем.
+            # ВАЖНО: передаем DEFAULT_PROMPT, так как метод stream_response теперь требует два аргумента.
+            async for _ in self.llm_client.stream_response("Привет", system_prompt=DEFAULT_PROMPT):
+                pass
+            logging.info("LLM engine is warm and ready.")
+        except Exception as e:
+            logging.warning(f"LLM warm-up failed: {e}")
 
     async def _listen_for_wake_word_async(self):
         loop = asyncio.get_running_loop()
@@ -85,6 +100,10 @@ class LokiOrchestrator:
             except KeyboardInterrupt: break
             except Exception: await asyncio.sleep(1)
 
+    def _is_command_request(self, text: str) -> bool:
+        """Проверяет, содержит ли текст ключевые слова для команд."""
+        return any(keyword in text.lower() for keyword in COMMAND_KEYWORDS)
+
     async def handle_command_async(self, audio_path: str):
         audio_playback_stream = None
         try:
@@ -92,11 +111,18 @@ class LokiOrchestrator:
             user_command_text = await loop.run_in_executor(None, self.stt_engine.transcribe, audio_path)
             if not user_command_text: return
 
+            # Логика выбора промпта
+            system_prompt = DEFAULT_PROMPT
+            if self._is_command_request(user_command_text):
+                logging.info("Command keywords detected, switching to COMMAND_PROMPT.")
+                system_prompt = COMMAND_PROMPT
+            
             full_response = ""
             answer_started = False
             tts_buffer = ""
 
-            async for token in self.llm_client.stream_response(user_command_text):
+            # Передаем выбранный промпт в клиент
+            async for token in self.llm_client.stream_response(user_command_text, system_prompt):
                 if self.interrupt_event.is_set(): break
                 
                 if not answer_started:
@@ -130,7 +156,7 @@ class LokiOrchestrator:
 
             if not self.interrupt_event.is_set() and full_response:
                 logging.info(f"Full LLM response received: '{full_response}'")
-                _, command_json = parse_llm_response(full_response)
+                text_to_speak, command_json = parse_llm_response(full_response)
                 if command_json: handle_visual_command(command_json)
 
         except asyncio.CancelledError: raise
