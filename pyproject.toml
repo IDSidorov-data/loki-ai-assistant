@@ -22,6 +22,7 @@ httpx = "*"
 sounddevice = "*"
 piper-tts = "*"
 onnxruntime = "*"
+google-generativeai = "*"
 
 # v-- ВОТ ИСПРАВЛЕНИЕ ДЛЯ ПРЕДУПРЕЖДЕНИЯ
 [tool.poetry.group.dev.dependencies] 

@@ -30,7 +30,7 @@ load_dotenv()
 from loki.audio_handler import record_command_vad
 from loki.stt_handler import WhisperSTT
 from loki.tts_handler import Piper_Engine
-from loki.llm_client import OllamaLLMClient
+from loki.llm_providers import get_llm_provider
 from loki.command_parser import parse_llm_response
 from loki.visual_controller import handle_visual_command
 from loki.prompts import UNIFIED_PROMPT
@@ -58,7 +58,7 @@ class LokiOrchestrator:
         """Инициализирует экземпляры всех необходимых сервисов."""
         self.stt_engine = WhisperSTT(model_name="base")
         self.tts_engine = Piper_Engine(model_path=PIPER_VOICE_PATH)
-        self.llm_client = OllamaLLMClient()
+        self.llm_provider = get_llm_provider()
         self.porcupine = None
         self.pa = None
         self.audio_stream = None
@@ -129,7 +129,7 @@ class LokiOrchestrator:
         try:
             # Мы полностью "прочитываем" потоковый ответ, чтобы убедиться,
             # что генерация действительно произошла, но игнорируем сами токены.
-            async for _ in self.llm_client.stream_response(
+            async for _ in self.llm_provider.stream_response(
                 "Привет", system_prompt=UNIFIED_PROMPT
             ):
                 pass
@@ -242,7 +242,7 @@ class LokiOrchestrator:
                 f"Sending request to LLM with unified prompt for text: '{user_command_text}'"
             )
             full_response = ""
-            async for token in self.llm_client.stream_response(
+            async for token in self.llm_provider.stream_response(
                 user_command_text, system_prompt=UNIFIED_PROMPT
             ):
                 if self.interrupt_event.is_set():
@@ -293,8 +293,11 @@ class LokiOrchestrator:
             self.pa.terminate()
         if self.porcupine:
             self.porcupine.delete()
-        if self.llm_client:
-            self.llm_client.close()
+        if self.llm_provider:
+            if hasattr(self.llm_provider, "close") and callable(
+                getattr(self.llm_provider, "close")
+            ):
+                self.llm_provider.close()
         logging.info("Ресурсы освобождены.")
 
 
